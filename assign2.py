@@ -2,6 +2,7 @@
 from transformers.pipelines import pipeline
 from flask import Flask,request,jsonify
 import time
+import sqlite3
 
 # Create flask app
 # Try to handle a error model also
@@ -48,12 +49,13 @@ def models_delete():
 def answer():
     global models_list
     model_name = request.args.get('model')
+    if model_name=='':
+        model_name="distilbert-base-uncased-distilled-squad"
     data = request.json
     required_model = [i for i in models_list if (i['model'] == model_name)]
     if len(required_model) ==0:
         return print("The selected model is not a part of the model list in API")
     # Importing the model for question answering
-    # Could be improved by not importing the model
     hg_comp = pipeline('question-answering', model=required_model[0]['model'],
                        tokenizer=required_model[0]['tokenizer'])
     answer = hg_comp({'question': data['question'], 'context': data['context']})['answer']
@@ -66,14 +68,81 @@ def answer():
         "question": data['question'],
         "context": data['context']
     }
+    try:
+        sqliteConnection = sqlite3.connect('SQLite_Hasit1.db')
+        cursor = sqliteConnection.cursor()
+        cursor.execute('''insert into answers (timestamp,question,answer,context,model) values(?,?,?,?,?);'''
+        ,(int(time.time()), data['question'], answer, data['context'], model_name))
+        sqliteConnection.commit()
+        cursor.close()
+
+    except sqlite3.Error as error:
+        return print("Error while querying the database", error)
+    finally:
+        if sqliteConnection:
+            sqliteConnection.close()
+
     return jsonify(output)
+
+@app.route("/answer", methods =['GET'])
+def answer_fromdb():
+    global models_list
+    model_name = request.args.get('model')
+    if model_name=='':
+        model_name="distilbert-base-uncased-distilled-squad"
+    start_time = request.args.get('start')
+    end_time = request.args.get('end')
+
+    try:
+        sqliteConnection = sqlite3.connect('SQLite_Hasit1.db')
+        cursor = sqliteConnection.cursor()
+        cursor.execute('''select * from answers where timestamp>=? and timestamp<=?  and model=?;'''
+        ,(start_time, end_time, model_name))
+        rows = cursor.fetchall()
+        outputlist=[]
+        for row in rows:
+            output = {
+                "timestamp": row[0],
+                "model": row[4],
+                "answer": row[2],
+                "question": row[1],
+                "context": row[3]
+            }
+            outputlist.append(output)
+        sqliteConnection.commit()
+        cursor.close()
+
+    except sqlite3.Error as error:
+        return print("Error while querying the database", error)
+    finally:
+        if sqliteConnection:
+            sqliteConnection.close()
+
+    return jsonify(outputlist)
 
 # Run if running "pyhton answer.py"
 if __name__=='__main__':
     # For Running API
     app.run(host='0.0.0.0',port=8000, threaded=True)
 
-
-
-
-
+# One time code for creating the table for storing the answers in SQLLite database
+# try:
+#     sqliteConnection = sqlite3.connect('SQLite_Hasit1.db')
+#     sqlite_create_table_query = '''CREATE TABLE answers (
+#                                 timestamp INTEGER PRIMARY KEY,
+#                                 question TEXT NOT NULL,
+#                                 answer TEXT NOT NULL,
+#                                 context TEXT NOT NULL,
+#                                 model TEXT NOT NULL);'''
+#
+#     cursor = sqliteConnection.cursor()
+#     cursor.execute(sqlite_create_table_query)
+#     sqliteConnection.commit()
+#     cursor.close()
+#
+# except sqlite3.Error as error:
+#     print("Error while querying the database", error)
+# finally:
+#     if sqliteConnection:
+#         sqliteConnection.close()
+#         print("sqlite connection is closed")
